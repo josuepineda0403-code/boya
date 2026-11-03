@@ -1,32 +1,45 @@
 import os
+import sqlite3
 from flask import Flask, jsonify, request
-from supabase import Client, create_client
 
 app = Flask(__name__)
+DB_FILE = 'animes.db'
 
-# Credenciales seguras tomadas de las variables de entorno de Render
-SUPABASE_URL = os.environ.get(
-    'SUPABASE_URL', 'https://hghmometralnsgjqaawp.supabase.co'
-)
-SUPABASE_SECRET_KEY = os.environ.get(
-    'SUPABASE_SECRET_KEY', 'sb_secret_3CWyezlbdueH0lQSyAa11A_oj41nC6T'
-)
 
-# Inicializar cliente oficial de Supabase en el servidor
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SECRET_KEY)
+# Inicializar la base de datos SQLite local
+def init_db():
+  conn = sqlite3.connect(DB_FILE)
+  cursor = conn.cursor()
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tareas_animes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            anime TEXT,
+            temporada INTEGER,
+            capitulo INTEGER,
+            idioma TEXT,
+            url_descarga TEXT,
+            estado TEXT DEFAULT 'pendiente',
+            filecode TEXT,
+            url_reproduccion TEXT,
+            url_descarga_directa TEXT
+        )
+    """)
+  conn.commit()
+  conn.close()
+
+
+init_db()
 
 
 @app.route('/')
 def home():
-  return jsonify(
-      {
-          'status': 'online',
-          'mensaje': '🚀 API Boya Maestra de Animes Activa y Segura',
-      }
-  )
+  return jsonify({
+      'status': 'online',
+      'mensaje': '🚀 API Boya Autónoma con SQLite Activa (Sin Supabase)',
+  })
 
 
-# 1. Endpoint para que tu Formulario Web guarde tareas
+# 1. Tu Formulario Web envía la tarea aquí
 @app.route('/api/agregar', methods=['POST'])
 def agregar_tarea():
   try:
@@ -40,72 +53,73 @@ def agregar_tarea():
     if not url_descarga:
       return jsonify({'error': 'La URL de descarga es obligatoria'}), 400
 
-    nueva_tarea = {
-        'anime': anime,
-        'temporada': temporada,
-        'capitulo': capitulo,
-        'idioma': idioma,
-        'url_descarga': url_descarga,
-        'estado': 'pendiente',
-    }
-
-    response = supabase.table('tareas_animes').insert(nueva_tarea).execute()
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+            INSERT INTO tareas_animes (anime, temporada, capitulo, idioma, url_descarga, estado)
+            VALUES (?, ?, ?, ?, ?, 'pendiente')
+        """,
+        (anime, temporada, capitulo, idioma, url_descarga),
+    )
+    conn.commit()
+    nuevo_id = cursor.lastrowid
+    conn.close()
 
     return (
-        jsonify(
-            {
-                'status': 'success',
-                'message': 'Tarea registrada correctamente en la base de datos',
-                'data': response.data,
-            }
-        ),
+        jsonify({
+            'status': 'success',
+            'message': 'Tarea registrada en SQLite correctamente',
+            'id': nuevo_id,
+        }),
         201,
     )
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
 
-# 2. Endpoint para que Google Colab consulte los capítulos pendientes
+# 2. Google Colab consulta los pendientes aquí
 @app.route('/api/pendientes', methods=['GET'])
 def obtener_pendientes():
   try:
-    response = (
-        supabase.table('tareas_animes')
-        .select('*')
-        .eq('estado', 'pendiente')
-        .execute()
-    )
-    return jsonify(response.data)
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row  # Para retornar diccionarios limpios
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tareas_animes WHERE estado = 'pendiente'")
+    rows = cursor.fetchall()
+    pendientes = [dict(row) for row in rows]
+    conn.close()
+    return jsonify(pendientes)
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
 
-# 3. Endpoint para que Google Colab marque el capítulo como completado
+# 3. Google Colab actualiza la tarea a completado aquí
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
   try:
     data = request.json or {}
-    update_data = {
-        'estado': 'completado',
-        'filecode': data.get('filecode'),
-        'url_reproduccion': data.get('url_reproduccion'),
-        'url_descarga_directa': data.get('url_descarga_directa'),
-    }
+    filecode = data.get('filecode')
+    url_reproduccion = data.get('url_reproduccion')
+    url_descarga_directa = data.get('url_descarga_directa')
 
-    response = (
-        supabase.table('tareas_animes')
-        .update(update_data)
-        .eq('id', id_tarea)
-        .execute()
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+            UPDATE tareas_animes 
+            SET estado = 'completado', filecode = ?, url_reproduccion = ?, url_descarga_directa = ?
+            WHERE id = ?
+        """,
+        (filecode, url_reproduccion, url_descarga_directa, id_tarea),
     )
+    conn.commit()
+    conn.close()
 
-    return jsonify(
-        {
-            'status': 'success',
-            'message': f'Tarea {id_tarea} marcada como completada',
-            'data': response.data,
-        }
-    )
+    return jsonify({
+        'status': 'success',
+        'message': f'Tarea {id_tarea} marcada como completada',
+    })
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
