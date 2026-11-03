@@ -1,8 +1,11 @@
 import os
 import sqlite3
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)  # 👈 Esto habilita las peticiones cruzadas desde cualquier web (CORS)
+
 DB_FILE = 'animes.db'
 
 
@@ -35,7 +38,7 @@ init_db()
 def home():
   return jsonify({
       'status': 'online',
-      'mensaje': '🚀 API Boya Autónoma con SQLite Activa (Sin Supabase)',
+      'mensaje': '🚀 API Boya Autónoma con SQLite y CORS Activa',
   })
 
 
@@ -83,7 +86,7 @@ def agregar_tarea():
 def obtener_pendientes():
   try:
     conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row  # Para retornar diccionarios limpios
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tareas_animes WHERE estado = 'pendiente'")
     rows = cursor.fetchall()
