@@ -4,27 +4,25 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # 👈 Esto habilita las peticiones cruzadas desde cualquier web (CORS)
+CORS(app)
 
 DB_FILE = 'animes.db'
 
 
-# Inicializar la base de datos SQLite local
 def init_db():
   conn = sqlite3.connect(DB_FILE)
   cursor = conn.cursor()
   cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tareas_animes (
+        CREATE TABLE IF NOT EXISTS cola_tareas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tipo TEXT DEFAULT 'episodio',
             anime TEXT,
             temporada INTEGER,
             capitulo INTEGER,
             idioma TEXT,
             url_descarga TEXT,
-            estado TEXT DEFAULT 'pendiente',
-            filecode TEXT,
-            url_reproduccion TEXT,
-            url_descarga_directa TEXT
+            estado TEXT DEFAULT 'faltante',
+            filecode TEXT
         )
     """)
   conn.commit()
@@ -36,93 +34,70 @@ init_db()
 
 @app.route('/')
 def home():
-  return jsonify({
-      'status': 'online',
-      'mensaje': '🚀 API Boya Autónoma con SQLite y CORS Activa',
-  })
+  return jsonify(
+      {'status': 'online', 'mensaje': '🚀 API Boya en Render Activa'}
+  )
 
 
-# 1. Tu Formulario Web envía la tarea aquí
-@app.route('/api/agregar', methods=['POST'])
-def agregar_tarea():
-  try:
-    data = request.json or {}
-    anime = data.get('anime', 'ONE PIECE')
-    temporada = int(data.get('temporada', 1))
-    capitulo = int(data.get('capitulo', 1))
-    idioma = data.get('idioma', 'Subtitulado')
-    url_descarga = data.get('url_descarga')
-
-    if not url_descarga:
-      return jsonify({'error': 'La URL de descarga es obligatoria'}), 400
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-            INSERT INTO tareas_animes (anime, temporada, capitulo, idioma, url_descarga, estado)
-            VALUES (?, ?, ?, ?, ?, 'pendiente')
-        """,
-        (anime, temporada, capitulo, idioma, url_descarga),
-    )
-    conn.commit()
-    nuevo_id = cursor.lastrowid
-    conn.close()
-
-    return (
-        jsonify({
-            'status': 'success',
-            'message': 'Tarea registrada en SQLite correctamente',
-            'id': nuevo_id,
-        }),
-        201,
-    )
-  except Exception as e:
-    return jsonify({'error': str(e)}), 500
-
-
-# 2. Google Colab consulta los pendientes aquí
-@app.route('/api/pendientes', methods=['GET'])
-def obtener_pendientes():
+# Obtener solo UNA tarea pendiente para que Colab procese de a uno sin duplicar
+@app.route('/api/siguiente-tarea', methods=['GET'])
+def siguiente_tarea():
   try:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tareas_animes WHERE estado = 'pendiente'")
-    rows = cursor.fetchall()
-    pendientes = [dict(row) for row in rows]
+    # Trae exclusivamente la primera tarea que tenga estado pendiente
+    cursor.execute(
+        "SELECT * FROM cola_tareas WHERE estado = 'pendiente' LIMIT 1"
+    )
+    row = cursor.fetchone()
     conn.close()
-    return jsonify(pendientes)
+
+    if row:
+      return jsonify(dict(row))
+    return jsonify(None)
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
 
-# 3. Google Colab actualiza la tarea a completado aquí
+# Marcar tarea como completada y eliminarla de la cola activa para evitar duplicados
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
   try:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Opción A: Borrarla para que nunca se repita
+    cursor.execute('DELETE FROM cola_tareas WHERE id = ?', (id_tarea,))
+    conn.commit()
+    conn.close()
+    return jsonify({'status': 'success', 'message': 'Tarea completada y purgada'})
+  except Exception as e:
+    return jsonify({'error': str(e)}), 500
+
+
+# Agregar o actualizar tarea desde el panel web
+@app.route('/api/agregar', methods=['POST'])
+def agregar_tarea():
+  try:
     data = request.json or {}
-    filecode = data.get('filecode')
-    url_reproduccion = data.get('url_reproduccion')
-    url_descarga_directa = data.get('url_descarga_directa')
+    id_tarea = data.get('id_tarea')
+    url_descarga = data.get('url_descarga', '')
+    estado = 'pendiente' if url_descarga else 'faltante'
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute(
-        """
-            UPDATE tareas_animes 
-            SET estado = 'completado', filecode = ?, url_reproduccion = ?, url_descarga_directa = ?
-            WHERE id = ?
-        """,
-        (filecode, url_reproduccion, url_descarga_directa, id_tarea),
-    )
+
+    if id_tarea:
+      cursor.execute(
+          """
+                UPDATE cola_tareas SET url_descarga = ?, estado = ? WHERE id = ?
+            """,
+          (url_descarga, estado, id_tarea),
+      )
     conn.commit()
     conn.close()
 
-    return jsonify({
-        'status': 'success',
-        'message': f'Tarea {id_tarea} marcada como completada',
-    })
+    return jsonify({'status': 'success'}), 200
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
