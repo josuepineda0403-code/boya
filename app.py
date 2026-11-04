@@ -4,7 +4,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # Permite que InfinityFree hable con Render sin restricciones de CORS
+CORS(app)
 
 DB_FILE = 'animes.db'
 
@@ -36,7 +36,7 @@ def home():
   return jsonify({'status': 'online', 'mensaje': '🚀 API Central Render Activa'})
 
 
-# 1. Recibir datos desde el panel web de InfinityFree (vía JavaScript del navegador)
+# 1. Recibir datos desde el navegador en InfinityFree
 @app.route('/api/agregar', methods=['POST'])
 def agregar_tarea():
   try:
@@ -46,6 +46,11 @@ def agregar_tarea():
     capitulo = int(data.get('capitulo', 1))
     idioma = data.get('idioma', 'Subtitulado')
     url_descarga = data.get('url_descarga')
+
+    print(
+        f'📥 [RENDER RECIBIÓ] Anime: {anime} | T{temporada} C{capitulo} | URL:'
+        f' {url_descarga}'
+    )
 
     if not url_descarga:
       return jsonify({'error': 'La URL es obligatoria'}), 400
@@ -63,12 +68,14 @@ def agregar_tarea():
     nuevo_id = cursor.lastrowid
     conn.close()
 
+    print(f'✅ [BD RENDER] Tarea guardada con ID: {nuevo_id}')
     return jsonify({'status': 'success', 'id': nuevo_id}), 201
   except Exception as e:
+    print(f'❌ [ERROR EN AGREGAR]: {str(e)}')
     return jsonify({'error': str(e)}), 500
 
 
-# 2. Entregar estrictamente UNA tarea pendiente a Google Colab
+# 2. Entregar tarea a Google Colab
 @app.route('/api/siguiente', methods=['GET'])
 def siguiente_tarea():
   try:
@@ -82,13 +89,17 @@ def siguiente_tarea():
     conn.close()
 
     if row:
-      return jsonify(dict(row))
+      tarea = dict(row)
+      print(f'📤 [COLAB PIDió] Entregando tarea ID {tarea["id"]}: {tarea["anime"]}')
+      return jsonify(tarea)
+
     return jsonify(None)
   except Exception as e:
+    print(f'❌ [ERROR EN SIGUIENTE]: {str(e)}')
     return jsonify({'error': str(e)}), 500
 
 
-# 3. Marcar como completado cuando Colab termine (evita duplicados para siempre)
+# 3. Marcar como completado
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
   try:
@@ -100,8 +111,10 @@ def completar_tarea(id_tarea):
     )
     conn.commit()
     conn.close()
+    print(f'🎉 [COMPLETADO] Tarea ID {id_tarea} marcada como procesada.')
     return jsonify({'status': 'success'})
   except Exception as e:
+    print(f'❌ [ERROR EN COMPLETAR]: {str(e)}')
     return jsonify({'error': str(e)}), 500
 
 
