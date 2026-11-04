@@ -35,20 +35,21 @@ init_db()
 @app.route('/')
 def home():
   return jsonify(
-      {'status': 'online', 'mensaje': '🚀 API Boya en Render Activa'}
+      {'status': 'online', 'mensaje': '🚀 API Radar Inverso Activa'}
   )
 
 
-# Obtener solo UNA tarea pendiente para que Colab procese de a uno sin duplicar
+# El Radar Inverso de Colab consulta este endpoint constantemente
 @app.route('/api/siguiente-tarea', methods=['GET'])
 def siguiente_tarea():
   try:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    # Trae exclusivamente la primera tarea que tenga estado pendiente
+    # Busca estrictamente el primer registro con URL que esté pendiente
     cursor.execute(
-        "SELECT * FROM cola_tareas WHERE estado = 'pendiente' LIMIT 1"
+        "SELECT * FROM cola_tareas WHERE estado = 'pendiente' AND url_descarga"
+        " IS NOT NULL AND url_descarga != '' LIMIT 1"
     )
     row = cursor.fetchone()
     conn.close()
@@ -60,22 +61,23 @@ def siguiente_tarea():
     return jsonify({'error': str(e)}), 500
 
 
-# Marcar tarea como completada y eliminarla de la cola activa para evitar duplicados
+# Al terminar el proceso, Colab marca la tarea como completada para evitar duplicados
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
   try:
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Opción A: Borrarla para que nunca se repita
-    cursor.execute('DELETE FROM cola_tareas WHERE id = ?', (id_tarea,))
+    cursor.execute(
+        "UPDATE cola_tareas SET estado = 'completado' WHERE id = ?", (id_tarea,)
+    )
     conn.commit()
     conn.close()
-    return jsonify({'status': 'success', 'message': 'Tarea completada y purgada'})
+    return jsonify({'status': 'success'})
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
 
-# Agregar o actualizar tarea desde el panel web
+# Recibir la actualización manual desde tu panel PHP (guardar URL)
 @app.route('/api/agregar', methods=['POST'])
 def agregar_tarea():
   try:
@@ -86,18 +88,14 @@ def agregar_tarea():
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
     if id_tarea:
       cursor.execute(
-          """
-                UPDATE cola_tareas SET url_descarga = ?, estado = ? WHERE id = ?
-            """,
+          "UPDATE cola_tareas SET url_descarga = ?, estado = ? WHERE id = ?",
           (url_descarga, estado, id_tarea),
       )
     conn.commit()
     conn.close()
-
-    return jsonify({'status': 'success'}), 200
+    return jsonify({'status': 'success'})
   except Exception as e:
     return jsonify({'error': str(e)}), 500
 
