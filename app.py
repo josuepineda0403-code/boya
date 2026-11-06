@@ -1,52 +1,92 @@
 import os
-import requests
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-PHP_SIGUIENTE_URL = 'https://index.free.je/api_siguiente.php'
-PHP_COMPLETAR_URL = 'https://index.free.je/api_completar.php'
+# Memoria temporal o almacenamiento central en la API de Render
+COLA_TAREAS = []
+CONTADOR_ID = 1
 
 @app.route('/')
 def home():
-    return jsonify({'status': 'online', 'mensaje': '🚀 API Central Render Sincronizada con PHP'})
+    return jsonify({
+        'status': 'online',
+        'mensaje': '🚀 API Central Render Activa (Modo Seguro Unidireccional)',
+        'pendientes': len([t for t in COLA_TAREAS if t['estado'] == 'pendiente'])
+    })
+
+@app.route('/api/agregar', methods=['POST'])
+def agregar_tarea():
+    global CONTADOR_ID
+    try:
+        data = request.json or {}
+        anime = data.get('anime', 'ONE PIECE')
+        temporada = int(data.get('temporada', 1))
+        capitulo = int(data.get('capitulo', 1))
+        idioma = data.get('idioma', 'Latino')
+        url_descarga = data.get('url_descarga')
+
+        if not url_descarga:
+            return jsonify({'error': 'La URL es obligatoria'}), 400
+
+        nueva_tarea = {
+            'id': CONTADOR_ID,
+            'anime': anime,
+            'temporada': temporada,
+            'capitulo': capitulo,
+            'idioma': idioma,
+            'url_descarga': url_descarga,
+            'estado': 'pendiente',
+            'filecode': None,
+            'url_reproduccion': None
+        }
+
+        COLA_TAREAS.append(nueva_tarea)
+        print(f'📥 [NUEVA TAREA] ID: {CONTADOR_ID} | {anime} T{temporada} C{capitulo}')
+        CONTADOR_ID += 1
+
+        return jsonify({'status': 'success', 'id': nueva_tarea['id']}), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/siguiente', methods=['GET'])
 def siguiente_tarea():
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.get(PHP_SIGUIENTE_URL, headers=headers, timeout=15)
-        
-        if response.status_code != 200:
-            return jsonify({'error': f'PHP respondió con estado {response.status_code}'}), 500
-
-        data = response.json()
-        if data.get('has_task') and data.get('tarea'):
-            return jsonify(data['tarea'])
-        
+        for tarea in COLA_TAREAS:
+            if tarea['estado'] == 'pendiente':
+                tarea['estado'] = 'procesando' # Marcar como en proceso
+                return jsonify(tarea)
         return jsonify(None)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
+    global COLA_TAREAS
     try:
         data = request.json or {}
-        payload = {
-            'id': id_tarea,
-            'filecode': data.get('filecode', ''),
-            'url_reproduccion': data.get('url_reproduccion', ''),
-            'estado': data.get('estado', 'completado')
-        }
-        
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        response = requests.post(PHP_COMPLETAR_URL, json=payload, headers=headers, timeout=15)
-        
-        return jsonify(response.json())
+        filecode = data.get('filecode', '')
+        url_reproduccion = data.get('url_reproduccion', '')
+
+        for tarea in COLA_TAREAS:
+            if tarea['id'] == id_tarea:
+                tarea['filecode'] = filecode
+                tarea['url_reproduccion'] = url_reproduccion
+                tarea['estado'] = 'completado_pend_sinc' # Listo para que PHP lo recoja
+                print(f'✅ [PROCESADO] Tarea ID {id_tarea} lista para sincronizar con PHP.')
+                return jsonify({'status': 'success'})
+
+        return jsonify({'error': 'Tarea no encontrada'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# Endpoint para que PHP recoja los completados y los guarde en su MySQL local
+@app.route('/api/sincronizar-pendientes', methods=['GET'])
+def sincronizar_pendientes():
+    completados = [t for t in COLA_TAREAS if t['estado'] == 'completado_pend_sinc']
+    return jsonify(completados)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
