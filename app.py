@@ -6,7 +6,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# Configuración directa de tu MySQL en InfinityFree
+# Configuración de tu MySQL en InfinityFree
 DB_HOST = 'sql107.infinityfree.com'
 DB_USER = 'if0_43337662'
 DB_PASS = 'Siempresolo12'
@@ -23,9 +23,20 @@ def obtener_conexion():
 
 @app.route('/')
 def home():
+    try:
+        connection = obtener_conexion()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) as total FROM cola_tareas WHERE estado = 'pendiente'")
+            resultado = cursor.fetchone()
+            pendientes = resultado['total'] if resultado else 0
+        connection.close()
+    except Exception:
+        pendientes = 0
+
     return jsonify({
         'status': 'online',
-        'mensaje': '🚀 API Central Render Activa (Directo a MySQL)',
+        'mensaje': '🚀 API Central Render Activa (Conectada Directo a MySQL)',
+        'pendientes': pendientes,
     })
 
 @app.route('/api/agregar', methods=['POST'])
@@ -52,7 +63,7 @@ def agregar_tarea():
             nuevo_id = cursor.lastrowid
         connection.close()
 
-        print(f'📥 [NUEVA TAREA] ID: {nuevo_id} | {anime} T{temporada} C{capitulo}')
+        print(f'📥 [NUEVA TAREA EN MYSQL] ID: {nuevo_id} | {anime} T{temporada} C{capitulo}')
         return jsonify({'status': 'success', 'id': nuevo_id}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -62,37 +73,36 @@ def siguiente_tarea():
     try:
         connection = obtener_conexion()
         with connection.cursor() as cursor:
-            # Selecciona la siguiente tarea pendiente
+            # Seleccionar la primera tarea pendiente en orden cronológico/ID
             cursor.execute("SELECT * FROM cola_tareas WHERE estado = 'pendiente' ORDER BY id ASC LIMIT 1")
             tarea = cursor.fetchone()
-            
+
             if tarea:
-                # Si el capítulo es mayor a 1, podemos buscar información del capítulo anterior
-                # del mismo anime, temporada e idioma para rastrear su estructura o filecode base si se requiere
-                anime_actual = tarea['anime']
-                temp_actual = tarea['temporada']
-                idioma_actual = tarea['idioma']
-                cap_actual = tarea['capitulo']
+                anime = tarea['anime']
+                temporada = tarea['temporada']
+                idioma = tarea['idioma']
+                capitulo = tarea['capitulo']
+
+                # RASTREO INTELIGENTE: Buscar si ya existe un capítulo completado anterior
+                # para este mismo Anime, Temporada e Idioma para heredar su filecode o ruta de carpeta
+                cursor.execute("""
+                    SELECT filecode, url_reproduccion FROM cola_tareas 
+                    WHERE anime = %s AND temporada = %s AND idioma = %s AND capitulo < %s AND estado = 'completado'
+                    ORDER BY capitulo DESC LIMIT 1
+                """, (anime, temporada, idioma, capitulo))
                 
-                if cap_actual > 1:
-                    cursor.execute("""
-                        SELECT filecode, url_reproduccion FROM cola_tareas 
-                        WHERE anime = %s AND temporada = %s AND idioma = %s AND capitulo = %s AND estado = 'completado'
-                        LIMIT 1
-                    """, (anime_actual, temp_actual, idioma_actual, cap_actual - 1))
-                    cap_anterior = cursor.fetchone()
-                    if cap_anterior:
-                        # Inyectamos una referencia del capítulo anterior en la respuesta para que el worker la use de guía
-                        tarea['referencia_anterior'] = cap_anterior['filecode']
-                    else:
-                        tarea['referencia_anterior'] = None
+                antecesor = cursor.fetchone()
+                if antecesor and antecesor['filecode']:
+                    # Pasamos la referencia del archivo anterior al worker para que ubique la carpeta exacta
+                    tarea['referencia_filecode'] = antecesor['filecode']
+                else:
+                    tarea['referencia_filecode'] = None
 
         connection.close()
         return jsonify(tarea if tarea else None)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/completار/<int:id_tarea>', methods=['POST']) # o /api/completar/<int:id_tarea>
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
     try:
@@ -101,7 +111,7 @@ def completar_tarea(id_tarea):
         url_reproduccion = data.get('url_reproduccion', '')
         estado = data.get('estado', 'completado')
 
-        # Actualización directa en MySQL solicitada por el usuario
+        # Actualización directa en la base de datos MySQL de InfinityFree
         connection = obtener_conexion()
         with connection.cursor() as cursor:
             sql = """
@@ -113,7 +123,7 @@ def completar_tarea(id_tarea):
             connection.commit()
         connection.close()
 
-        print(f'✅ [MySQL Actualizado] Tarea ID {id_tarea} -> Completado (Filecode: {filecode})')
+        print(f'✅ [MySQL Actualizado Directo] Tarea ID {id_tarea} -> Completado (Filecode: {filecode})')
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
