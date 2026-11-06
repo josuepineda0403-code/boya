@@ -1,52 +1,35 @@
 import os
-import requests
+import pymysql
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-COLA_TAREAS = []
-CONTADOR_ID = 1
+# Configuración directa de tu MySQL en InfinityFree
+DB_HOST = 'sql107.infinityfree.com'
+DB_USER = 'if0_43337662'
+DB_PASS = 'Siempresolo12'
+DB_NAME = 'if0_43337662_gestor_animes'
 
-# URL exacta de tu endpoint PHP en InfinityFree
-PHP_WEBHOOK_URL = 'https://index.free.je/api_completar.php'
-
-
-def enviar_resultado_a_php(id_tarea, filecode, url_reproduccion, estado):
-    try:
-        # El script PHP espera recibir 'id', 'filecode' y 'url_reproduccion'
-        payload = {
-            'id': id_tarea,
-            'filecode': filecode,
-            'url_reproduccion': url_reproduccion,
-            'estado': estado
-        }
-        
-        # Enviar los datos por POST JSON hacia tu archivo PHP
-        response = requests.post(PHP_WEBHOOK_URL, json=payload, timeout=10)
-        
-        if response.status_code == 200:
-            print(f'✅ [Enviado a PHP] Tarea ID {id_tarea} guardada en InfinityFree por PHP.')
-            print(f'Respuesta PHP: {response.text}')
-        else:
-            print(f'⚠️ [Aviso PHP] El servidor PHP respondió con estado {response.status_code}: {response.text}')
-    except Exception as e:
-        print(f'❌ [Error al notificar a PHP]: {e}')
-
+def obtener_conexion():
+    return pymysql.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor
+    )
 
 @app.route('/')
 def home():
     return jsonify({
         'status': 'online',
-        'mensaje': '🚀 API Central Render Activa (Modo Memoria con Webhook PHP)',
-        'pendientes': len(COLA_TAREAS),
+        'mensaje': '🚀 API Central Render Activa (Directo a MySQL)',
     })
-
 
 @app.route('/api/agregar', methods=['POST'])
 def agregar_tarea():
-    global CONTADOR_ID
     try:
         data = request.json or {}
         anime = data.get('anime', 'ONE PIECE')
@@ -54,66 +37,99 @@ def agregar_tarea():
         capitulo = int(data.get('capitulo', 1))
         idioma = data.get('idioma', 'Latino')
         url_descarga = data.get('url_descarga')
-        id_mysql = data.get('id', CONTADOR_ID)
 
         if not url_descarga:
             return jsonify({'error': 'La URL es obligatoria'}), 400
 
-        nueva_tarea = {
-            'id': id_mysql,
-            'anime': anime,
-            'temporada': temporada,
-            'capitulo': capitulo,
-            'idioma': idioma,
-            'url_descarga': url_descarga,
-            'estado': 'pendiente',
-        }
+        connection = obtener_conexion()
+        with connection.cursor() as cursor:
+            sql = """
+                INSERT INTO cola_tareas (anime, temporada, capitulo, idioma, url_descarga, estado) 
+                VALUES (%s, %s, %s, %s, %s, 'pendiente')
+            """
+            cursor.execute(sql, (anime, temporada, capitulo, idioma, url_descarga))
+            connection.commit()
+            nuevo_id = cursor.lastrowid
+        connection.close()
 
-        COLA_TAREAS.append(nueva_tarea)
-        print(
-            f'📥 [NUEVA TAREA] ID: {id_mysql} | {anime} T{temporada} C{capitulo}'
-        )
-        CONTADOR_ID += 1
-
-        return jsonify({'status': 'success', 'id': id_mysql}), 201
+        print(f'📥 [NUEVA TAREA] ID: {nuevo_id} | {anime} T{temporada} C{capitulo}')
+        return jsonify({'status': 'success', 'id': nuevo_id}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/siguiente', methods=['GET'])
 def siguiente_tarea():
     try:
-        for tarea in COLA_TAREAS:
-            if tarea['estado'] == 'pendiente':
-                return jsonify(tarea)
-        return jsonify(None)
+        connection = obtener_conexion()
+        with connection.cursor() as cursor:
+            # Selecciona la siguiente tarea pendiente
+            cursor.execute("SELECT * FROM cola_tareas WHERE estado = 'pendiente' ORDER BY id ASC LIMIT 1")
+            tarea = cursor.fetchone()
+            
+            if tarea:
+                # Si el capítulo es mayor a 1, podemos buscar información del capítulo anterior
+                # del mismo anime, temporada e idioma para rastrear su estructura o filecode base si se requiere
+                anime_actual = tarea['anime']
+                temp_actual = tarea['temporada']
+                idioma_actual = tarea['idioma']
+                cap_actual = tarea['capitulo']
+                
+                if cap_actual > 1:
+                    cursor.execute("""
+                        SELECT filecode, url_reproduccion FROM cola_tareas 
+                        WHERE anime = %s AND temporada = %s AND idioma = %s AND capitulo = %s AND estado = 'completado'
+                        LIMIT 1
+                    """, (anime_actual, temp_actual, idioma_actual, cap_actual - 1))
+                    cap_anterior = cursor.fetchone()
+                    if cap_anterior:
+                        # Inyectamos una referencia del capítulo anterior en la respuesta para que el worker la use de guía
+                        tarea['referencia_anterior'] = cap_anterior['filecode']
+                    else:
+                        tarea['referencia_anterior'] = None
+
+        connection.close()
+        return jsonify(tarea if tarea else None)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
+@app.route('/api/completار/<int:id_tarea>', methods=['POST']) # o /api/completar/<int:id_tarea>
 @app.route('/api/completar/<int:id_tarea>', methods=['POST'])
 def completar_tarea(id_tarea):
-    global COLA_TAREAS
     try:
         data = request.json or {}
         filecode = data.get('filecode', '')
         url_reproduccion = data.get('url_reproduccion', '')
         estado = data.get('estado', 'completado')
 
-        # Notificar a PHP para que sea PHP quien actualice la base de datos MySQL
-        enviar_resultado_a_php(id_tarea, filecode, url_reproduccion, estado)
+        # Actualización directa en MySQL solicitada por el usuario
+        connection = obtener_conexion()
+        with connection.cursor() as cursor:
+            sql = """
+                UPDATE cola_tareas 
+                SET estado = %s, filecode = %s, url_reproduccion = %s 
+                WHERE id = %s
+            """
+            cursor.execute(sql, (estado, filecode, url_reproduccion, id_tarea))
+            connection.commit()
+        connection.close()
 
-        # Purgar de la memoria de Render
-        COLA_TAREAS = [t for t in COLA_TAREAS if t['id'] != id_tarea]
+        print(f'✅ [MySQL Actualizado] Tarea ID {id_tarea} -> Completado (Filecode: {filecode})')
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/estado-global', methods=['GET'])
 def estado_global():
-    return jsonify({'status': 'success', 'pendientes': len(COLA_TAREAS)})
-
+    try:
+        connection = obtener_conexion()
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) as total FROM cola_tareas WHERE estado = 'pendiente'")
+            resultado = cursor.fetchone()
+            pendientes = resultado['total'] if resultado else 0
+        connection.close()
+        return jsonify({'status': 'success', 'pendientes': pendientes})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
