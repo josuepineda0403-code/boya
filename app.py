@@ -6,7 +6,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# Configuración de tu MySQL en InfinityFree
+# Configuración directa de tu base de datos MySQL en InfinityFree
 DB_HOST = 'sql107.infinityfree.com'
 DB_USER = 'if0_43337662'
 DB_PASS = 'Siempresolo12'
@@ -35,7 +35,7 @@ def home():
 
     return jsonify({
         'status': 'online',
-        'mensaje': '🚀 API Central Render Activa (Conectada Directo a MySQL)',
+        'mensaje': '🚀 API Central Render Activa (Directo a MySQL)',
         'pendientes': pendientes,
     })
 
@@ -63,7 +63,7 @@ def agregar_tarea():
             nuevo_id = cursor.lastrowid
         connection.close()
 
-        print(f'📥 [NUEVA TAREA EN MYSQL] ID: {nuevo_id} | {anime} T{temporada} C{capitulo}')
+        print(f'📥 [NUEVA TAREA] ID: {nuevo_id} | {anime} T{temporada} C{capitulo}')
         return jsonify({'status': 'success', 'id': nuevo_id}), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -73,7 +73,6 @@ def siguiente_tarea():
     try:
         connection = obtener_conexion()
         with connection.cursor() as cursor:
-            # Seleccionar la primera tarea pendiente en orden cronológico/ID
             cursor.execute("SELECT * FROM cola_tareas WHERE estado = 'pendiente' ORDER BY id ASC LIMIT 1")
             tarea = cursor.fetchone()
 
@@ -83,17 +82,15 @@ def siguiente_tarea():
                 idioma = tarea['idioma']
                 capitulo = tarea['capitulo']
 
-                # RASTREO INTELIGENTE: Buscar si ya existe un capítulo completado anterior
-                # para este mismo Anime, Temporada e Idioma para heredar su filecode o ruta de carpeta
+                # Rastrear si hay un capítulo anterior completado para heredar su filecode de referencia
                 cursor.execute("""
-                    SELECT filecode, url_reproduccion FROM cola_tareas 
-                    WHERE anime = %s AND temporada = %s AND idioma = %s AND capitulo < %s AND estado = 'completado'
+                    SELECT filecode FROM cola_tareas 
+                    WHERE anime = %s AND temporada = %s AND idioma = %s AND capitulo < %s AND estado = 'completado' AND filecode IS NOT NULL AND filecode != ''
                     ORDER BY capitulo DESC LIMIT 1
                 """, (anime, temporada, idioma, capitulo))
                 
                 antecesor = cursor.fetchone()
                 if antecesor and antecesor['filecode']:
-                    # Pasamos la referencia del archivo anterior al worker para que ubique la carpeta exacta
                     tarea['referencia_filecode'] = antecesor['filecode']
                 else:
                     tarea['referencia_filecode'] = None
@@ -111,7 +108,6 @@ def completar_tarea(id_tarea):
         url_reproduccion = data.get('url_reproduccion', '')
         estado = data.get('estado', 'completado')
 
-        # Actualización directa en la base de datos MySQL de InfinityFree
         connection = obtener_conexion()
         with connection.cursor() as cursor:
             sql = """
@@ -123,7 +119,7 @@ def completar_tarea(id_tarea):
             connection.commit()
         connection.close()
 
-        print(f'✅ [MySQL Actualizado Directo] Tarea ID {id_tarea} -> Completado (Filecode: {filecode})')
+        print(f'✅ [MySQL Actualizado] Tarea ID {id_tarea} -> Completado (Filecode: {filecode})')
         return jsonify({'status': 'success'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
